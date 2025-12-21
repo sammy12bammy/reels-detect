@@ -1,1 +1,1 @@
-sa
+source venv/bin/activate
