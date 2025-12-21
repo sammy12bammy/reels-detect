@@ -8,3 +8,4 @@ data/
 .vscode/
 aug_data/
 initial model
+logs/

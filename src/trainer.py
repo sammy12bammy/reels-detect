@@ -8,13 +8,15 @@ from matplotlib import pyplot as plt
 import os
 import random
 import shutil
+import cv2
 from tensorflow.keras.models import Model # base model
 from tensorflow.keras.layers import Input, Conv2D, Dense, GlobalMaxPooling2D
 from tensorflow.keras.applications import VGG16 # image classification neural network
 
-
+# custom classes 
 from get_data import ImageCapture
 from aug_pipeline import AugmentationPipeline
+from train_pipeline import FaceTracker
 
 
 # move from images to train
@@ -127,12 +129,19 @@ print(aug_images['test'].as_numpy_iterator().next())
 def load_labels(label_path: str):
     with open(label_path.numpy(), 'r', encoding='utf-8') as f:
         label = json.load(f)
-    return [label['class']],label['bbox']
+    return [label['class']], label['bbox']
+
+def set_label_shapes(class_label, bbox):
+    """Set explicit shapes after tf.py_function (which loses shape info)."""
+    class_label.set_shape([1])
+    bbox.set_shape([4])
+    return class_label, bbox
 
 aug_labels = {}
 for type in ['train', 'val', 'test']:
     type_labels = tf.data.Dataset.list_files(f'aug_data/{type}/labels/*.json', shuffle=False)
-    type_labels = type_labels.map(lambda x: tf.py_function(load_labels, [x], [tf.uint8, tf.float16])) 
+    type_labels = type_labels.map(lambda x: tf.py_function(load_labels, [x], [tf.uint8, tf.float16]))
+    type_labels = type_labels.map(set_label_shapes)  # Fix: set explicit shapes
     aug_labels[type] = type_labels
 print(aug_labels.keys())
 aug_labels['train'].as_numpy_iterator().next()
@@ -184,8 +193,73 @@ facetracker.summary()
 tf.keras.utils.plot_model(facetracker, "initial model", show_shapes=True, show_layer_names=True, show_dtype=True)
 
 # quick test run
-# X, y = train.as_numpy_iterator().next() # x - images, y -labels
-# print(X.shape)
-# classes, coords = facetracker.predict(X)
-# print(f"Classes: {classes}, Coords: {coords}")
+# Predicting without training
+train = aug_data['train']
 
+x, y = train.as_numpy_iterator().next()
+print(x.shape)
+classes, coords = facetracker.predict(x)
+print(f"Classes: {classes}, \nCoords: {coords}")
+
+
+# Step 8 Define Losses and Optimizers
+
+# Define Optimizer and LR
+batches_per_epoch = len(train)
+lr_decay = (1./0.75 -1)/batches_per_epoch # how much learning rate is going to drop
+opt = tf.keras.optimizers.Adam(learning_rate=0.0001, decay=lr_decay)
+# Create localization loss and classification loss
+def localization_loss(y_true, yhat):
+    delta_coord = tf.reduce_sum(tf.square(y_true[:,:2] - yhat[:,:2]))
+
+    h_true = y_true[:,3] - y_true[:,1] # height of box
+    w_true = y_true[:,2] - y_true[:,0] # width of box
+    h_pred = yhat[:,3] - yhat[:,1] # predicted height
+    w_pred = yhat[:,2] - yhat[:,0] # predicted width
+
+    delta_size = tf.reduce_sum(tf.square(w_true - w_pred) + tf.square(h_true - h_pred))
+    return delta_coord + delta_size
+
+classloss = tf.keras.losses.BinaryCrossentropy()
+regressloss = localization_loss
+
+# Test Loss on a sample
+print(f'localization_loss(y[1], coords): {localization_loss(y[1], coords)}')
+print(f'classification loss: {classloss(y[0], classes)}')
+print(f'regression loss: {regressloss(y[1], coords)}')
+
+# Step 9 - Train Model
+model = FaceTracker(facetracker)
+model.compile(opt, classloss, regressloss)
+
+# logs
+logdir='logs'
+tensorboard_cb = tf.keras.callbacks.TensorBoard(log_dir=logdir) # review model performance
+
+# train for 10 epochs - one epoch is one complete pass of the entire training dataset
+hist = model.fit(aug_data['train'].take(100), epochs=10, 
+                 validation_data=aug_data['val'], callbacks=[tensorboard_cb])
+
+# Step 10 - Test and visualize results
+
+# show training data + making predictions
+test_data = train.as_numpy_iterator()
+test_sample = test_data.next()
+prediction = facetracker.predict(test_sample[0])
+fig, ax = plt.subplots(ncols=4, figsize=(20,20))
+for idx in range(4): 
+    sample_image = test_sample[0][idx].copy()  # Make a writable copy
+    sample_coords = prediction[1][idx]
+    
+    # draw rectangle if confidence is greater than 0.9
+    if prediction[0][idx] > 0.9:
+        cv2.rectangle(sample_image, 
+                      tuple(np.multiply(sample_coords[:2], [120,120]).astype(int)),
+                      tuple(np.multiply(sample_coords[2:], [120,120]).astype(int)), 
+                            (255,0,0), 2)
+    
+    ax[idx].imshow(sample_image)
+plt.show()
+
+# Step 11 - Save Model
+facetracker.save('facedetection.keras')
