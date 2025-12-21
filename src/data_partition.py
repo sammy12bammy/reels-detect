@@ -7,6 +7,10 @@ import cv2
 import json
 import numpy as np
 from matplotlib import pyplot as plt
+# moving images
+import os
+import random
+import shutil
 
 # limit GPU mem growth
 # avoid OOM errors by setting memory growth - good practice for tensor flow
@@ -40,4 +44,38 @@ for i in range(4):
     # ax[i].axis("off")
 
 # plt.tight_layout()
-plt.show()
+# plt.show()
+
+# move from images to train
+# 70% into train - 84
+# 15% into val - 18
+# 15% into test - 18
+src_dir_ims = 'data/images'
+
+def move_images(src, dest, num):
+    images = [
+        f for f in os.listdir(src)
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
+    selected = random.sample(images, num)
+
+    for img in selected:
+        src_path = os.path.join(src, img)
+        dst_path = os.path.join(dest, img)
+        shutil.move(src_path, dst_path)
+
+    print(f"Moved {num} images to {dest}")
+
+move_images(src_dir_ims, 'data/train/images', 84)
+move_images(src_dir_ims, 'data/val/images', 18)
+move_images(src_dir_ims, 'data/test/images', 18)
+
+# move matching labels
+for folder in ['train', 'val', 'test']:
+    for file in os.listdir(os.path.join('data', folder, 'images')):
+        filename = file.split('.')[0]+'.json'
+        exisiting_fp = os.path.join('data','labels', filename)
+        if os.path.exists(exisiting_fp):
+            new_fp = os.path.join('data', folder, 'labels', filename)
+            os.replace(exisiting_fp, new_fp)
+    print(f"Moved labels to {folder} folder")
