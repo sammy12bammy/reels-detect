@@ -8,12 +8,6 @@ import json
 import numpy as np
 from matplotlib import pyplot as plt
 
-# param x - full file path
-def load_image(x):
-    byte_img = tf.io.read_file(x)
-    img = tf.io.decode_jpeg(byte_img)
-    return img
-
 # limit GPU mem growth
 # avoid OOM errors by setting memory growth - good practice for tensor flow
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -25,16 +19,25 @@ tf.config.list_physical_devices('GPU')
 print(tf.config.list_physical_devices())
 
 # load images from data/images with wildcard and shuffle off
-images = tf.data.Dataset.list_files('data/images/*.jpg', shuffle=False)
-images.as_numpy_iterator().next()
-# apply the load_image function to each image
-images = images.map(load_image)
-images.as_numpy_iterator().next()
+images = tf.data.Dataset.list_files("data/images/*.jpg", shuffle=False)
 
-# visualize images - view raw img with matplotlib
-img_gen = images.batch(4).as_numpy_iterator()
-plot_imgs = img_gen.next()  # Get one batch of 4 images
-fig, ax = plt.subplots(ncols=4, figsize=(20,20))
-for idx in range(4):
-    ax[idx].imshow(plot_imgs[idx])
+def load_image(path):
+    img = tf.io.read_file(path)
+    img = tf.image.decode_jpeg(img, channels=3)
+    img = tf.image.resize(img, (224, 224))
+    img = tf.cast(img, tf.float32) / 255.0
+    return img
+
+images = images.map(load_image)
+
+# get one batch of 4
+batch = next(iter(images.batch(4)))
+
+# plot on matplotlib visualize
+fig, ax = plt.subplots(1, 4, figsize=(20, 5))
+for i in range(4):
+    ax[i].imshow(batch[i])
+    # ax[i].axis("off")
+
+# plt.tight_layout()
 plt.show()
