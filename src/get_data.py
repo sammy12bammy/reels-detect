@@ -28,5 +28,3 @@ for img_num in range(number_images):
 cap.release()
 cv2.destroyAllWindows()
 print('Finished taking images')
-
-import tensorflow as tf
