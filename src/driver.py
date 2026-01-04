@@ -15,7 +15,7 @@ while cap.isOpened():
     # Get frame dimensions
     h, w = frame.shape[:2]
     
-    # Optional: center crop to square (comment out to use full frame)
+    # center crop to square
     # size = min(h, w)
     # start_x = (w - size) // 2
     # start_y = (h - size) // 2
@@ -41,7 +41,7 @@ while cap.isOpened():
                                     [80,0])), 
                             (255,0,0), -1)
         # Controls text render
-        cv2.putText(frame, 'WANGHAF Detect', tuple(np.add(np.multiply(sample_coords[:2], [w, h]).astype(int),
+        cv2.putText(frame, 'face', tuple(np.add(np.multiply(sample_coords[:2], [w, h]).astype(int),
                                                [0,-5])),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2, cv2.LINE_AA)
     

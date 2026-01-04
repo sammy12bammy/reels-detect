@@ -93,22 +93,36 @@ print(tf.config.list_physical_devices())
 
 
 #Step 1 - Capture data from webcam
+# This should be run n times because it captures only 30 images at a time
 # print("Starting data capture from webcam")
-# capture = ImageCapture(images_path='data/images', camera_id=0)
-# capture.capture(num_images=30, delay=0.5, show_preview=True)
+inp = int(input("Enter the amount of session you would like to capture (each session captures 30 images): "))
+for i in range(inp):
+    print(f"Starting session {i+1} of {inp}")
+    capture = ImageCapture(images_path='data/images', camera_id=0)
+    capture.capture(num_images=30, delay=0.5, show_preview=True)
 
 # Step 1.5 - extra check
 # plot_images()
 
+# Wait for user
+inp = input("Press 'y' to continue to data partitioning")
+while inp.lower() != 'y':
+    inp = input("Press 'y' to continue to data partitioning")
+
 # Step 2 - partion the data
-# print("Partitioning data into train, val, test")
-# move_all_data(total_images=120)
+print("Partitioning data into train, val, test")
+move_all_data(total_images=120)
 
 #Step 3 - Augmentation pipeline - see aug_pipeline.py for details
 # print("Starting augmentation pipeline")
 # pipeline = AugmentationPipeline(data_dir='data',output_dir='aug_data',target_width=711,target_height=400,augmentations_per_image=60)
 # pipeline.run()
 
+inp = input("Press 'y' to continue to data augmentation")
+while inp.lower() != 'y':
+    inp = input("Press 'y' to continue to data augmentation")
+
+print("Starting augmentation pipeline")
 # Step 4 - put it into tensorflow dataset
 def load_image(file):
     encoded = tf.io.read_file(file)
@@ -167,7 +181,13 @@ print("printing images and labels together")
 print(f"Images : {aug_data['test'].as_numpy_iterator().next()[0]}")
 print(f"Labels : {aug_data['test'].as_numpy_iterator().next()[1]}")
 
-# Step 7 - Building Neural Network model
+print("Images have been augmented and combined with labels into tensorflow datasets")
+inp = input("Press 'y' to continue to building the model")
+while inp.lower() != 'y':
+    inp = input("Press 'y' to continue to building the model")
+
+
+# Building Neural Network model
 vgg = VGG16(include_top=False) # don't need the top classification layers
 vgg.summary()
 # sigmoid should be between 0 - 1 for both classification and regression
