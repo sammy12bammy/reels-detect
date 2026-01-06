@@ -1,47 +1,99 @@
 import tensorflow as tf
-from tensorflow.keras.models import Model # base model
+from tensorflow.keras.models import Model
 
 class FaceTracker(Model):
-    # pass through pre built neural network 
+    """
+    Custom training model for 3-head face detection and mouth tracking.
+    
+    Handles:
+        - Face classification (binary)
+        - Face bounding box regression  
+        - Mouth open classification (binary)
+    """
+    
     def __init__(self, model, **kwargs):
+        """
+        Args:
+            model: The compiled 3-head Keras model (VGG16-based)
+        """
         super().__init__(**kwargs)
         self.model = model
 
-    # pass through loss and optimizer
-    def compile(self, opt, classloss, localizationloss, **kwargs):
+    def compile(self, opt, classloss, localizationloss, mouth_classloss, **kwargs):
+        """
+        Compile the model with optimizer and loss functions.
+        
+        Args:
+            opt: Optimizer (e.g., Adam)
+            classloss: Binary cross-entropy for face classification
+            localizationloss: Custom loss for bounding box regression
+            mouth_classloss: Binary cross-entropy for mouth open classification
+        """
         super().compile(**kwargs)
         self.classloss = classloss
         self.lloss = localizationloss
+        self.mouth_classloss = mouth_classloss  # NEW: mouth open loss
         self.opt = opt
 
-    # hard core training step
     def train_step(self, batch, **kwargs):
+        """
+        Custom training step for 3-head model.
+        
+        Returns:
+            Dictionary of losses for monitoring
+        """
         images, labels = batch
         
         with tf.GradientTape() as tape: 
-            classes, coords = self.model(images, training=True) # make predictions
+            # Get predictions from all 3 heads
+            face_class, face_bbox, mouth_open = self.model(images, training=True)
             
-            # pass through losses
-            batch_classloss = self.classloss(labels[0], classes) # classifaction loss
-            batch_lloss = self.lloss(tf.cast(labels[1], tf.float32), coords) # localization loss
+            # Calculate losses for each head
+            batch_face_classloss = self.classloss(labels[0], face_class)
+            batch_bbox_loss = self.lloss(tf.cast(labels[1], tf.float32), face_bbox)
+            batch_mouth_loss = self.mouth_classloss(labels[2], mouth_open)  # NEW
             
-            total_loss = batch_lloss+0.5*batch_classloss # total loss metric
+            # Combined weighted loss
+            total_loss = batch_bbox_loss + 0.5*batch_face_classloss + 0.5*batch_mouth_loss
             
-            grad = tape.gradient(total_loss, self.model.trainable_variables) # apply gradients
+            grad = tape.gradient(total_loss, self.model.trainable_variables)
         
-        self.opt.apply_gradients(zip(grad, self.model.trainable_variables)) # gradient descent. apply one step of gradient descent
+        self.opt.apply_gradients(zip(grad, self.model.trainable_variables))
         
-        return {"total_loss":total_loss, "class_loss":batch_classloss, "regress_loss":batch_lloss}
+        return {
+            "total_loss": total_loss,
+            "face_class_loss": batch_face_classloss,
+            "bbox_loss": batch_bbox_loss,
+            "mouth_loss": batch_mouth_loss  # NEW: track mouth loss separately
+        }
 
     def test_step(self, batch, **kwargs):
+        """
+        Custom validation/test step for 3-head model.
+        
+        Returns:
+            Dictionary of losses for monitoring
+        """
         images, labels = batch
-        classes, coords = self.model(images, training=False)
+        
+        # Get predictions from all 3 heads
+        face_class, face_bbox, mouth_open = self.model(images, training=False)
 
-        batch_classloss = self.classloss(labels[0], classes)
-        batch_lloss = self.lloss(tf.cast(labels[1], tf.float32), coords)
-        total_loss = batch_lloss+0.5*batch_classloss
+        # Calculate losses for each head
+        batch_face_classloss = self.classloss(labels[0], face_class)
+        batch_bbox_loss = self.lloss(tf.cast(labels[1], tf.float32), face_bbox)
+        batch_mouth_loss = self.mouth_classloss(labels[2], mouth_open)  # NEW
+        
+        # Combined weighted loss
+        total_loss = batch_bbox_loss + 0.5*batch_face_classloss + 0.5*batch_mouth_loss
 
-        return {"total_loss":total_loss, "class_loss":batch_classloss, "regress_loss":batch_lloss}
+        return {
+            "total_loss": total_loss,
+            "face_class_loss": batch_face_classloss,
+            "bbox_loss": batch_bbox_loss,
+            "mouth_loss": batch_mouth_loss  # NEW: track mouth loss separately
+        }
 
     def call(self, images, **kwargs):
+        """Forward pass through the model."""
         return self.model(images, **kwargs)

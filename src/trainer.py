@@ -105,24 +105,23 @@ for i in range(inp):
 # plot_images()
 
 # Wait for user
-inp = input("Press 'y' to continue to data partitioning")
-while inp.lower() != 'y':
-    inp = input("Press 'y' to continue to data partitioning")
+inp = input("Press 'y' to continue to data partitioning: ")
+if inp.lower() == 'y':
+    inp = input("Press 'y' to continue to data partitioning: ")
+    # Step 2 - partion the data
 
-# Step 2 - partion the data
-print("Partitioning data into train, val, test")
-move_all_data(total_images=120)
+    print("Partitioning data into train, val, test")
+    move_all_data(total_images=90)
 
 #Step 3 - Augmentation pipeline - see aug_pipeline.py for details
-# print("Starting augmentation pipeline")
-# pipeline = AugmentationPipeline(data_dir='data',output_dir='aug_data',target_width=711,target_height=400,augmentations_per_image=60)
-# pipeline.run()
-
-inp = input("Press 'y' to continue to data augmentation")
+inp = input("Press 'y' to continue to data augmentation: ")
 while inp.lower() != 'y':
-    inp = input("Press 'y' to continue to data augmentation")
+    inp = input("Press 'y' to continue to data augmentation: ")
 
 print("Starting augmentation pipeline")
+pipeline = AugmentationPipeline(data_dir='data', output_dir='aug_data', target_width=711, target_height=400, augmentations_per_image=60)
+pipeline.run()
+print("Augmentation complete!")
 # Step 4 - put it into tensorflow dataset
 def load_image(file):
     encoded = tf.io.read_file(file)
@@ -141,20 +140,34 @@ print(aug_images['test'].as_numpy_iterator().next())
 
 # Step 5 - Labels
 def load_labels(label_path: str):
+    """
+    Load labels from JSON file.
+    
+    Returns:
+        face_class: [1] if face present, [0] otherwise
+        bbox: [x1, y1, x2, y2] normalized face bounding box coordinates
+        mouth_open: [1] if mouth is open, [0] if closed
+    """
     with open(label_path.numpy(), 'r', encoding='utf-8') as f:
         label = json.load(f)
-    return [label['class']], label['bbox']
+    
+    face_class = label['class']
+    bbox = label['bbox']
+    mouth_open = label.get('mouth_open', 0)  # Default to 0 (closed) if not labeled yet
+    
+    return [face_class], bbox, [mouth_open]
 
-def set_label_shapes(class_label, bbox):
+def set_label_shapes(face_class, bbox, mouth_open):
     """Set explicit shapes after tf.py_function (which loses shape info)."""
-    class_label.set_shape([1])
+    face_class.set_shape([1])
     bbox.set_shape([4])
-    return class_label, bbox
+    mouth_open.set_shape([1])  # New: mouth open classification
+    return face_class, bbox, mouth_open
 
 aug_labels = {}
 for type in ['train', 'val', 'test']:
     type_labels = tf.data.Dataset.list_files(f'aug_data/{type}/labels/*.json', shuffle=False)
-    type_labels = type_labels.map(lambda x: tf.py_function(load_labels, [x], [tf.uint8, tf.float16]))
+    type_labels = type_labels.map(lambda x: tf.py_function(load_labels, [x], [tf.uint8, tf.float16, tf.uint8]))  # 3 outputs now
     type_labels = type_labels.map(set_label_shapes)  # Fix: set explicit shapes
     aug_labels[type] = type_labels
 print(aug_labels.keys())
@@ -190,21 +203,39 @@ while inp.lower() != 'y':
 # Building Neural Network model
 vgg = VGG16(include_top=False) # don't need the top classification layers
 vgg.summary()
-# sigmoid should be between 0 - 1 for both classification and regression
+
 def build_model():
+    """
+    Build 3-head face tracking model with VGG16 base.
+    
+    Architecture:
+        - Shared VGG16 feature extractor (pretrained on ImageNet)
+        - Head 1: Face classification (binary) - is there a face?
+        - Head 2: Face bounding box regression - where is the face?
+        - Head 3: Mouth open classification (binary) - is mouth open?
+    
+    Returns:
+        Model with 3 outputs: [face_class, face_bbox, mouth_open]
+    """
     input_layer = Input(shape=(120,120,3)) # shape of input images
-    vgg = VGG16(include_top=False)(input_layer) # base model
-    # 2 different predicition heads 
-    # Classification model
+    vgg = VGG16(include_top=False)(input_layer) # base model - shared feature extractor
+    
+    # Head 1: Face Classification
     f1 = GlobalMaxPooling2D()(vgg) # reduce dimensions - condense
     class1 = Dense(2048, activation='relu')(f1)
-    class2 = Dense(1, activation='sigmoid')(class1)
-    # Bounding Box model
+    face_class = Dense(1, activation='sigmoid', name='face_class')(class1)  # Binary: face present?
+    
+    # Head 2: Face Bounding Box Regression
     f2 = GlobalMaxPooling2D()(vgg) 
     regress1 = Dense(2048, activation='relu')(f2)
-    regress2 = Dense(4, activation='sigmoid')(regress1)
+    face_bbox = Dense(4, activation='sigmoid', name='face_bbox')(regress1)  # 4 coords: [x1, y1, x2, y2]
+    
+    # Head 3: Mouth Open Classification (NEW!)
+    f3 = GlobalMaxPooling2D()(vgg)
+    mouth1 = Dense(2048, activation='relu')(f3)
+    mouth_open = Dense(1, activation='sigmoid', name='mouth_open')(mouth1)  # Binary: mouth open?
 
-    facetracker = Model(inputs=input_layer, outputs=[class2, regress2]) # classifcation and regression output
+    facetracker = Model(inputs=input_layer, outputs=[face_class, face_bbox, mouth_open])
     return facetracker
 
 # test
@@ -218,8 +249,12 @@ train = aug_data['train']
 
 x, y = train.as_numpy_iterator().next()
 print(x.shape)
-classes, coords = facetracker.predict(x)
-print(f"Classes: {classes}, \nCoords: {coords}")
+print(f"Labels shape: face_class={y[0].shape}, bbox={y[1].shape}, mouth_open={y[2].shape}")
+
+face_class_pred, face_bbox_pred, mouth_open_pred = facetracker.predict(x)
+print(f"Face class predictions: {face_class_pred}")
+print(f"Face bbox predictions: {face_bbox_pred}")
+print(f"Mouth open predictions: {mouth_open_pred}")
 
 
 # Step 8 Define Losses and Optimizers
@@ -240,17 +275,19 @@ def localization_loss(y_true, yhat):
     delta_size = tf.reduce_sum(tf.square(w_true - w_pred) + tf.square(h_true - h_pred))
     return delta_coord + delta_size
 
-classloss = tf.keras.losses.BinaryCrossentropy()
-regressloss = localization_loss
+# Define losses for all 3 heads
+classloss = tf.keras.losses.BinaryCrossentropy()  # For face classification
+regressloss = localization_loss  # For bounding box regression
+mouth_classloss = tf.keras.losses.BinaryCrossentropy()  # For mouth open classification
 
-# Test Loss on a sample
-print(f'localization_loss(y[1], coords): {localization_loss(y[1], coords)}')
-print(f'classification loss: {classloss(y[0], classes)}')
-print(f'regression loss: {regressloss(y[1], coords)}')
+# Test losses on a sample
+print(f'Face classification loss: {classloss(y[0], face_class_pred)}')
+print(f'Bounding box loss: {regressloss(y[1], face_bbox_pred)}')
+print(f'Mouth open loss: {mouth_classloss(y[2], mouth_open_pred)}')
 
 # Step 9 - Train Model
 model = FaceTracker(facetracker)
-model.compile(opt, classloss, regressloss)
+model.compile(opt, classloss, regressloss, mouth_classloss)
 
 # logs
 logdir='logs'

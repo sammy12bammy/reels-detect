@@ -70,7 +70,7 @@ class AugmentationPipeline:
                                       cv2.BORDER_CONSTANT, value=[0, 0, 0])
             start_x = -pad_left
         
-        return img, scale, start_x
+        return img, scale, start_x, orig_w, orig_h
     
     def _transform_coords(self, coords, scale, start_x):
         """Transform bounding box coordinates for resized/cropped image."""
@@ -105,29 +105,54 @@ class AugmentationPipeline:
         return image_count * self.augmentations_per_image
     
     def _process_image(self, split: str, image_name: str):
-        """Process a single image through the augmentation pipeline."""
+        """
+        Process a single image through the augmentation pipeline.
+        
+        Preserves all labels including mouth_open classification.
+        """
         # Load image
         img_path = os.path.join(self.data_dir, split, 'images', image_name)
         img = cv2.imread(img_path)
         
-        # Resize and crop
-        img, scale, start_x = self._resize_and_crop(img)
+        # Resize and crop (get original dimensions for denormalization)
+        img, scale, start_x, orig_width, orig_height = self._resize_and_crop(img)
         
         # Load label if exists
         base_name = image_name.split(".")[0]
         label_path = os.path.join(self.data_dir, split, 'labels', f'{base_name}.json')
         
         coords = [0, 0, 0.00001, 0.00001]  # default coords if no label
+        mouth_open = 0  # default: mouth closed
         has_label = os.path.exists(label_path)
         
         if has_label:
             with open(label_path, 'r') as f:
                 label = json.load(f)
             
-            coords[0] = label['shapes'][0]['points'][0][0]  # x1
-            coords[1] = label['shapes'][0]['points'][0][1]  # y1
-            coords[2] = label['shapes'][0]['points'][1][0]  # x2
-            coords[3] = label['shapes'][0]['points'][1][1]  # y2
+            # Check if label has 'class' field (simple format) or 'shapes' (LabelMe format)
+            if 'class' in label:
+                # Simple format: {"class": 1, "bbox": [x1, y1, x2, y2], "mouth_open": 0/1}
+                # Skip if no face detected (class 0 or empty bbox)
+                if label.get('class', 0) == 0 or not label.get('bbox'):
+                    print(f"⊘ Skipping {os.path.basename(img_path)} - no face detected")
+                    return  # Skip this image
+                
+                # Denormalize bbox coordinates (convert from 0-1 to pixel values)
+                bbox = label['bbox']
+                coords[0] = bbox[0] * orig_width   # x1
+                coords[1] = bbox[1] * orig_height  # y1
+                coords[2] = bbox[2] * orig_width   # x2
+                coords[3] = bbox[3] * orig_height  # y2
+                
+                mouth_open = label.get('mouth_open', 0)
+            else:
+                # LabelMe format (legacy support)
+                coords[0] = label['shapes'][0]['points'][0][0]  # x1
+                coords[1] = label['shapes'][0]['points'][0][1]  # y1
+                coords[2] = label['shapes'][0]['points'][1][0]  # x2
+                coords[3] = label['shapes'][0]['points'][1][1]  # y2
+                
+                mouth_open = label.get('mouth_open', 0)
             
             coords = self._transform_coords(coords, scale, start_x)
         
@@ -140,7 +165,7 @@ class AugmentationPipeline:
                 out_img_path = os.path.join(self.output_dir, split, 'images', f'{base_name}.{i}.jpg')
                 cv2.imwrite(out_img_path, augmented['image'])
                 
-                # Save augmented label
+                # Save augmented label (with mouth_open preserved)
                 aug_label_data = {'image': image_name}
                 
                 if has_label and len(augmented['bboxes']) > 0:
@@ -149,6 +174,9 @@ class AugmentationPipeline:
                 else:
                     aug_label_data['bbox'] = [0, 0, 0, 0]
                     aug_label_data['class'] = 0
+                
+                # Preserve mouth_open label (NEW!)
+                aug_label_data['mouth_open'] = mouth_open
                 
                 out_label_path = os.path.join(self.output_dir, split, 'labels', f'{base_name}.{i}.json')
                 with open(out_label_path, 'w') as f:
